@@ -1,5 +1,5 @@
 FROM composer:2 AS composer
-FROM php:8.3-fpm-alpine AS base
+FROM php:8.6-fpm-alpine AS base
 RUN apk add --no-cache libpq icu-libs libzip fcgi \
  && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS postgresql-dev icu-dev libzip-dev linux-headers \
  && docker-php-ext-install pdo_pgsql intl bcmath zip opcache \
