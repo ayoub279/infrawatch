@@ -1,0 +1,121 @@
+name: Verify InfraWatch
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  application:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: infrawatch_test
+          POSTGRES_USER: infrawatch
+          # Ephemeral runner only. No static test password in source.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["127.0.0.1:5432:5432"]
+        options: --health-cmd "pg_isready -U infrawatch -d infrawatch_test" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      APP_ENV: testing
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: infrawatch_test
+      DB_USERNAME: infrawatch
+      DB_PASSWORD: ""
+      RUN_TRANSPORT_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: pdo_pgsql, mbstring, curl, intl
+          coverage: none
+          tools: composer:v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install and validate PHP dependencies
+        working-directory: backend
+        run: |
+          composer validate --strict
+          composer install --no-interaction --prefer-dist
+          composer audit --locked
+      - name: Backend tests on PostgreSQL, including transport fixtures
+        working-directory: backend
+        run: composer test
+      - name: PHP formatting
+        working-directory: backend
+        run: composer lint
+      - name: Angular install, dependency audit and production build
+        working-directory: frontend
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+          npm test
+          npm run build
+      - name: Shell syntax and lint
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y shellcheck
+          for file in scripts/*.sh deploy/*.sh; do bash -n "$file"; done
+          shellcheck scripts/*.sh deploy/*.sh
+
+  containers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: {node-version: "24"}
+      - name: Configure and build
+        run: |
+          bash scripts/init.sh
+          docker compose config --quiet
+          docker compose build
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: infrawatch-api:local
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+      - name: Scan proxy image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: infrawatch-proxy:local
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+      - name: Scan PostgreSQL base image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: postgres:17-alpine
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+      - name: Start stack and seed real demo configuration
+        run: |
+          docker compose up -d --wait --wait-timeout 240
+          docker compose exec -T api php artisan db:seed --force
+      - name: HTTP smoke, real monitoring pass, and backend authorization
+        run: node scripts/smoke.mjs
+      - name: Backup and verify restore into disposable PostgreSQL database
+        run: |
+          backup=$(bash scripts/backup.sh)
+          bash scripts/verify-restore.sh "$backup"
+      - name: Shut down ephemeral CI stack
+        if: always()
+        run: docker compose down --volumes

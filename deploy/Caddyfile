@@ -1,0 +1,29 @@
+{
+    # Access logs are intentionally disabled; never record login bodies or cookies.
+    admin localhost:2019
+}
+{$SITE_ADDRESS::80} {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        -Server
+    }
+    request_body {
+        max_size 16KB
+    }
+    handle /api/* {
+        root * /srv/api/public
+        header Cache-Control "no-store"
+        php_fastcgi api:9000 {
+            root /app/public
+        }
+    }
+    handle {
+        root * /srv/frontend
+        try_files {path} /index.html
+        file_server
+    }
+}

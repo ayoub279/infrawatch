@@ -1,0 +1,82 @@
+@if (loading()) {
+ <div class="loading">Connecting to InfraWatch…</div>
+} @else if (!user()) {
+ <main class="login">
+  <section class="intro"><div class="brand"><span class="mark">⌁</span> InfraWatch</div><p class="eyebrow">INFRASTRUCTURE INTELLIGENCE</p>
+   <h1>Know what’s up.<br>Act when it isn’t.</h1><p>Availability monitoring and a focused incident workflow for your infrastructure.</p>
+   <div class="intro-line"><span class="dot"></span> HTTP · DNS · TLS</div>
+  </section>
+  <form class="login-form" (ngSubmit)="login()"><span class="eyebrow">YOUR OPERATIONS WORKSPACE</span><h2>Welcome back</h2><p>Sign in with your administrator-provided account.</p>
+   <label for="email">Email address</label><input id="email" name="email" type="email" [(ngModel)]="email" required autocomplete="username">
+   <label for="password">Password</label><input id="password" name="password" type="password" [(ngModel)]="password" required autocomplete="current-password">
+   @if(error()) { <p class="error" role="alert">{{error()}}</p> }
+   <button class="primary" type="submit" [disabled]="busy()">{{busy() ? 'Signing in…' : 'Sign in →'}}</button>
+   <small>Private workspace · No public registration</small>
+  </form>
+ </main>
+} @else {
+ <div class="workspace">
+  <aside class="sidebar"><div class="brand"><span class="mark">⌁</span> InfraWatch</div><div class="workspace-label">OPERATIONS</div>
+   <nav aria-label="Main navigation">
+    <button [class.active]="page()==='overview'" (click)="page.set('overview')"><span>◫</span> Overview</button>
+    <button [class.active]="page()==='incidents'" (click)="page.set('incidents')"><span>⚑</span> Incidents <b>{{activeIncidents()}}</b></button>
+    @if(user()?.role==='admin') { <button [class.active]="page()==='audit'" (click)="page.set('audit')"><span>≡</span> Audit trail</button> }
+   </nav>
+   <div class="sidebar-bottom"><div class="avatar">{{user()?.name?.slice(0,1)}}</div><div><strong>{{user()?.name}}</strong><small>{{user()?.role}}</small></div><button class="signout" (click)="logout()" [disabled]="busy()" aria-label="Sign out">↗</button></div>
+  </aside>
+  <main class="content"><header><div><p class="eyebrow">WORKSPACE / {{page() | uppercase}}</p><h1>{{page()==='overview'?'Infrastructure overview':page()==='incidents'?'Incident management':'Audit trail'}}</h1><p class="subtitle">{{page()==='overview'?'A clear view of your services, one check at a time.':page()==='incidents'?'Acknowledge, investigate, and resolve service interruptions.':'Administrative changes, with accountability built in.'}}</p></div>
+   <div class="header-actions"><span class="refresh">Refreshes every 15s<br>{{updated() | date:'HH:mm:ss'}}</span>
+    @if(page()==='overview' && user()?.role==='admin') { <button class="primary" (click)="edit()">+ Add service</button> }
+   </div></header>
+   @if(error()) { <p class="error" role="alert">{{error()}} <button (click)="error.set('')">Dismiss</button></p> }
+   @if(page()==='overview') {
+    <section class="metrics" aria-label="Availability summary">
+     <article><span>MONITORED SERVICES</span><div>{{services().length}}<small>configured</small></div></article>
+     <article><span><i class="dot"></i> OPERATIONAL</span><div>{{count('operational')}}<small>recent successful checks</small></div></article>
+     <article><span><i class="dot red"></i> ACTIVE INCIDENTS</span><div>{{activeIncidents()}}<small>awaiting resolution</small></div></article>
+     <article><span>AWAITING SIGNAL</span><div>{{count('pending')+count('stale')}}<small>pending or stale checks</small></div></article>
+    </section>
+    <section class="panel"><div class="panel-heading"><h2>Services <span class="number">{{services().length}}</span></h2><span class="muted">Checks scheduled every minute</span></div>
+     <div class="table-wrap"><table><thead><tr><th>SERVICE</th><th>STATUS</th><th>RESPONSE</th><th>HTTP</th><th>LAST CHECK</th><th>ACTIONS</th></tr></thead>
+      <tbody>@for(s of services(); track s.id) {
+       <tr><td><strong>{{s.name}}</strong><small class="url">{{s.url}}</small></td><td><span class="badge" [attr.data-state]="state(s)"><i></i>{{state(s)}}</span></td>
+        <td>{{s.latest ? s.latest.response_ms+' ms' : '—'}}</td><td>{{s.latest?.http_status || '—'}}</td><td>{{s.latest ? (s.latest.checked_at | date:'MMM d, HH:mm:ss':'UTC')+' UTC' : 'Not checked'}}</td>
+        <td class="actions"><button (click)="history(s)">History</button>@if(user()?.role==='admin') { <button (click)="edit(s)">Edit</button><button class="danger" [disabled]="busy()" (click)="remove(s)">Delete</button> }</td></tr>
+      } @empty { <tr><td colspan="6" class="empty">No services yet. An admin can add an allowed HTTP or HTTPS destination.</td></tr> }</tbody></table></div>
+     <footer>Operational means HTTP 2xx. Checks older than 3 minutes appear stale; paused services are not checked.</footer>
+    </section>
+    <div class="note"><span>↳</span><div><strong>Built for a deliberate response</strong><p>Failures open one active incident per service. Recovery is recorded automatically; incident resolution is a human decision.</p></div></div>
+   } @else if(page()==='incidents') {
+    <section class="panel"><div class="panel-heading"><h2>Recent incidents</h2><span class="muted">Active first · Up to 100</span></div><div class="table-wrap"><table><thead><tr><th>INCIDENT</th><th>SERVICE</th><th>STATUS</th><th>OPENED (UTC)</th><th>ACTIONS</th></tr></thead><tbody>
+     @for(i of incidents(); track i.id) { <tr><td>#{{i.id}}</td><td><strong>{{i.service_name}}</strong></td><td><span class="badge" [attr.data-state]="i.status">{{i.status}}</span></td><td>{{i.opened_at | date:'MMM d, HH:mm:ss':'UTC'}}</td><td class="actions">
+      @if(i.status==='open') { <button [disabled]="busy()" (click)="transition(i,'acknowledge')">Acknowledge</button> }
+      @if(i.status!=='resolved') { <button [disabled]="busy()" (click)="transition(i,'resolve')">Resolve</button> }
+     </td></tr> } @empty { <tr><td colspan="5" class="empty">No incidents recorded.</td></tr> }
+    </tbody></table></div><footer>Both roles may acknowledge and resolve. A service that remains down will open a new incident on its next check after resolution.</footer></section>
+   } @else {
+    <section class="panel"><div class="panel-heading"><h2>Administrative activity</h2><span class="muted">Latest 100 · UTC</span></div><table><thead><tr><th>EVENT</th><th>SUBJECT</th><th>ACTOR</th><th>TIME</th></tr></thead><tbody>
+     @for(a of audits(); track a.id) { <tr><td>{{a.action}}</td><td>#{{a.subject_id}}</td><td>{{a.actor_id ? "#"+a.actor_id : "System / CLI"}}</td><td>{{a.created_at | date:'MMM d, HH:mm:ss':'UTC'}}</td></tr> } @empty { <tr><td colspan="4" class="empty">No administrative changes recorded.</td></tr> }
+    </tbody></table></section>
+   }
+   <div class="page-footer"><span>InfraWatch</span><span>Availability & incident operations</span></div>
+  </main>
+ </div>
+ @if(editing()) {
+  <div class="overlay"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="edit-title"><div class="panel-heading"><h2 id="edit-title">{{editId?'Edit service':'Add a service'}}</h2><button (click)="editing.set(false)" aria-label="Close">✕</button></div>
+   <form (ngSubmit)="save()"><label for="name">Service name</label><input id="name" name="name" [(ngModel)]="form.name" maxlength="80" required>
+    <label for="url">Destination URL</label><input id="url" name="url" type="url" [(ngModel)]="form.url" required maxlength="2048">
+    <p class="hint">Allowed hosts: {{hosts().join(', ') || 'none'}}. HTTP port 80 or HTTPS port 443. No query strings or credentials.</p>
+    <label class="checkbox"><input type="checkbox" name="enabled" [(ngModel)]="form.enabled"> Enable scheduled monitoring</label>
+    @if(error()) { <p class="error" role="alert">{{error()}}</p> }
+    <button class="primary" type="submit" [disabled]="busy()">{{busy()?'Saving…':'Save service'}}</button></form>
+  </section></div>
+ }
+ @if(selected(); as s) {
+  <div class="overlay"><section class="dialog history" role="dialog" aria-modal="true" aria-labelledby="history-title"><div class="panel-heading"><div><h2 id="history-title">{{s.name}} · Check history</h2><p class="muted">Latest 60 real checks · UTC</p></div><button (click)="selected.set(null)" aria-label="Close">✕</button></div>
+   <div class="table-wrap"><table><thead><tr><th>TIME</th><th>RESULT</th><th>HTTP / TIME</th><th>DNS ANSWERS</th><th>TLS EXPIRES</th></tr></thead><tbody>
+    @for(c of checks(); track c.id) { <tr><td>{{c.checked_at | date:'MMM d, HH:mm:ss':'UTC'}}</td><td>{{c.available?'Up':c.error || 'Down'}}</td><td>{{c.http_status || '—'}} / {{c.response_ms}} ms</td><td class="dns">{{c.dns_addresses}}</td><td>{{c.tls_expires_at ? (c.tls_expires_at | date:'yyyy-MM-dd':'UTC') : '—'}}</td></tr> } @empty { <tr><td colspan="5" class="empty">No checks recorded yet.</td></tr> }
+   </tbody></table></div>
+  </section></div>
+ }
+}
+
